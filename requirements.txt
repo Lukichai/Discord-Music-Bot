@@ -1,3 +1,3 @@
 discord.py
-youtube_dl
+yt_dlp
 python-dotenv
