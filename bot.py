@@ -59,7 +59,7 @@ async def play_next(ctx):
         if queues[server_id]:
             next_song_url = queues[server_id].pop(0)  # Get next song from the queue
             print(f"Playing next song: {next_song_url}")
-            player = await YTDLSource.from_url(next_song_url, loop=bot.loop, stream=True)
+            player = await YTDLSource.from_url(next_song_url, loop=bot.loop, stream=False)
             
             # Check if the bot is still connected and playing
             if ctx.voice_client:
@@ -146,7 +146,7 @@ async def play(ctx, *, url):
         await ctx.send(f"✅ Added to queue: {url}\n{get_queue_message(server_id)}")
     else:
         # Play the song immediately if nothing is playing
-        player = await YTDLSource.from_url(url, loop=bot.loop, stream=True)
+        player = await YTDLSource.from_url(url, loop=bot.loop, stream=False)
         ctx.voice_client.play(player, after=lambda e: asyncio.run_coroutine_threadsafe(play_next(ctx), bot.loop))
         await ctx.send(f"🎶 Now playing: {player.title}\n{get_queue_message(server_id)}", view=PlayerControls(ctx))  # Show queue and buttons
 
