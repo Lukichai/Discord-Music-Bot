@@ -11,7 +11,9 @@ TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix="/", intents=intents)
+
+# Use `commands.Bot` for hybrid commands (supports both prefix and slash commands)
+bot = commands.Bot(command_prefix="/", intents=intents, help_command=None)  # Disable default help command
 
 ytdl_format_options = {
     'format': 'bestaudio/best',
@@ -28,11 +30,10 @@ ytdl_format_options = {
 }
 
 ffmpeg_options = {
-    'options': '-vn -loglevel quiet'  # Adjust these if needed
+    'options': '-vn -loglevel quiet'
 }
 
 ytdl = YoutubeDL(ytdl_format_options)
-
 queues = {}
 
 class YTDLSource(discord.PCMVolumeTransformer):
@@ -55,31 +56,28 @@ class YTDLSource(discord.PCMVolumeTransformer):
 async def play_next(ctx):
     server_id = ctx.guild.id
     try:
-        # Check if there are any songs left in the queue
         if queues[server_id]:
-            next_song_url = queues[server_id].pop(0)  # Get next song from the queue
+            next_song_url = queues[server_id].pop(0)
             print(f"Playing next song: {next_song_url}")
             player = await YTDLSource.from_url(next_song_url, loop=bot.loop, stream=False)
             
-            # Check if the bot is still connected and playing
             if ctx.voice_client:
                 ctx.voice_client.play(player, after=lambda e: asyncio.run_coroutine_threadsafe(play_next(ctx), bot.loop))
-                await ctx.send(f"🎶 Now playing: {player.title}\n{get_queue_message(server_id)}", view=PlayerControls(ctx))  # Show queue and buttons
+                await ctx.send(f"🎶 Now playing: {player.title}\n{get_queue_message(server_id)}", view=PlayerControls(ctx))
             else:
-                # If the bot gets disconnected, we handle it
-                await ctx.send("Bot disconnected from the voice channel unexpectedly. Reconnecting...")
-                await join(ctx)  # Reconnect to the channel
-                await play_next(ctx)  # Retry playing the next song
+                await ctx.send("Bot disconnected. Reconnecting...")
+                await join(ctx)
+                await play_next(ctx)
         else:
-            await ctx.voice_client.disconnect()  # Disconnect if no more songs in the queue
+            await ctx.voice_client.disconnect()
             await ctx.send("Queue finished. Left the voice channel.")
     except Exception as e:
         print(f"Error in play_next: {e}")
-        await ctx.send(f"Error occurred while playing the song: {e}")
+        await ctx.send(f"Error occurred: {e}")
 
 class PlayerControls(View):
     def __init__(self, ctx):
-        super().__init__(timeout=None)  # Timeout set to None to keep buttons active
+        super().__init__(timeout=None)
         self.ctx = ctx
 
     @discord.ui.button(label="⏸️ Pause", style=discord.ButtonStyle.primary)
@@ -109,7 +107,14 @@ class PlayerControls(View):
             await interaction.guild.voice_client.disconnect()
         await interaction.response.send_message("🛑 Stopped and left the channel.", ephemeral=True)
 
-@bot.command()
+def get_queue_message(server_id):
+    if server_id in queues and queues[server_id]:
+        queue_list = "\n".join([f"{i+1}. {url}" for i, url in enumerate(queues[server_id])])
+        return f"Current Queue:\n{queue_list}"
+    return "The queue is empty!"
+
+# Slash Commands
+@bot.hybrid_command(name="join", description="Join the voice channel you're in")
 async def join(ctx):
     if ctx.author.voice:
         await ctx.author.voice.channel.connect()
@@ -117,22 +122,13 @@ async def join(ctx):
     else:
         await ctx.send("You're not in a voice channel!")
 
-def get_queue_message(server_id):
-    """ Helper function to return the current queue as a string. """
-    if server_id in queues and queues[server_id]:
-        queue_list = "\n".join([f"{i+1}. {url}" for i, url in enumerate(queues[server_id])])
-        return f"Current Queue:\n{queue_list}"
-    return "The queue is empty!"
-
-@bot.command()
-async def play(ctx, *, url):
+@bot.hybrid_command(name="play", description="Play a song from a URL or add it to the queue")
+async def play(ctx, *, url: str):
     server_id = ctx.guild.id
 
-    # Initialize the queue if it's the first song for the server
     if server_id not in queues:
         queues[server_id] = []
 
-    # If no one is connected to voice, make the bot join
     if not ctx.voice_client:
         if ctx.author.voice:
             await ctx.author.voice.channel.connect()
@@ -140,41 +136,38 @@ async def play(ctx, *, url):
             await ctx.send("You're not in a voice channel!")
             return
 
-    # If the bot is already playing a song, add the new song to the queue
     if ctx.voice_client.is_playing():
-        queues[server_id].append(url)  # Add song to queue
+        queues[server_id].append(url)
         await ctx.send(f"✅ Added to queue: {url}\n{get_queue_message(server_id)}")
     else:
-        # Play the song immediately if nothing is playing
         player = await YTDLSource.from_url(url, loop=bot.loop, stream=False)
         ctx.voice_client.play(player, after=lambda e: asyncio.run_coroutine_threadsafe(play_next(ctx), bot.loop))
-        await ctx.send(f"🎶 Now playing: {player.title}\n{get_queue_message(server_id)}", view=PlayerControls(ctx))  # Show queue and buttons
+        await ctx.send(f"🎶 Now playing: {player.title}\n{get_queue_message(server_id)}", view=PlayerControls(ctx))
 
-@bot.command()
+@bot.hybrid_command(name="skip", description="Skip the current song")
 async def skip(ctx):
     if ctx.voice_client.is_playing():
         ctx.voice_client.stop()
         await ctx.send("⏭️ Skipped the song.")
         if queues[ctx.guild.id]:
-            await play_next(ctx)  # Automatically play the next song in the queue
+            await play_next(ctx)
     else:
         await ctx.send("❌ Nothing is playing.")
 
-@bot.command()
+@bot.hybrid_command(name="pause", description="Pause the current song")
 async def pause(ctx):
     if ctx.voice_client.is_playing():
         ctx.voice_client.pause()
         await ctx.send("⏸️ Paused the music.")
 
-@bot.command()
+@bot.hybrid_command(name="resume", description="Resume the paused song")
 async def resume(ctx):
     if ctx.voice_client.is_paused():
         ctx.voice_client.resume()
         await ctx.send("▶️ Resumed the music.")
 
-@bot.command()
+@bot.hybrid_command(name="stop", description="Stop the music and clear the queue")
 async def stop(ctx):
-    """Stop the music and clear the queue"""
     server_id = ctx.guild.id
     if ctx.voice_client:
         ctx.voice_client.stop()
@@ -182,9 +175,8 @@ async def stop(ctx):
             queues[server_id].clear()
         await ctx.send("🛑 Stopped the music and cleared the queue.")
 
-@bot.command()
+@bot.hybrid_command(name="queue", description="Show the current queue")
 async def queue(ctx):
-    """Show the current queue"""
     server_id = ctx.guild.id
     if server_id in queues and queues[server_id]:
         q = '\n'.join([f"{i+1}. {url}" for i, url in enumerate(queues[server_id])])
@@ -192,9 +184,8 @@ async def queue(ctx):
     else:
         await ctx.send("📭 The queue is currently empty.")
 
-@bot.command()
+@bot.hybrid_command(name="leave", description="Leave the voice channel and clear the queue")
 async def leave(ctx):
-    """Leave the voice channel"""
     server_id = ctx.guild.id
     if server_id in queues:
         queues[server_id].clear()
@@ -202,5 +193,31 @@ async def leave(ctx):
         await ctx.voice_client.disconnect()
         await ctx.send("👋 Left the voice channel and cleared the queue.")
 
+@bot.hybrid_command(name="help", description="Show all available commands")
+async def help(ctx):
+    embed = discord.Embed(title="🎵 Music Bot Commands", color=discord.Color.blue())
+    embed.add_field(
+        name="Available Commands:",
+        value="""
+        **/join** - Join your voice channel  
+        **/play <url>** - Play a song or add to queue  
+        **/skip** - Skip the current song  
+        **/pause** - Pause the music  
+        **/resume** - Resume paused music  
+        **/stop** - Stop music and clear queue  
+        **/queue** - Show the current queue  
+        **/leave** - Leave the voice channel  
+        **/help** - Show this help message  
+        """,
+        inline=False
+    )
+    await ctx.send(embed=embed)
+
+# Sync slash commands on startup
+@bot.event
+async def on_ready():
+    print(f"Logged in as {bot.user.name}")
+    await bot.tree.sync()  # Sync slash commands globally
+    print("Slash commands synced!")
 
 bot.run(TOKEN)
